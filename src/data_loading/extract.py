@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 import zipfile
 from pathlib import Path
-
-import rarfile
 
 from utils.schema.extraction import ExtractConfig
 
@@ -18,9 +17,22 @@ def _pcap_files(directory: Path) -> list[Path]:
 
 
 def extract_rar(archive_path: Path, dest_dir: Path) -> list[Path]:
+    """Extract a .rar archive using bsdtar (libarchive)."""
     dest_dir.mkdir(parents=True, exist_ok=True)
-    with rarfile.RarFile(archive_path) as rf:
-        rf.extractall(path=str(dest_dir))
+    try:
+        result = subprocess.run(
+            ["bsdtar", "-xf", str(archive_path), "-C", str(dest_dir)],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            "bsdtar (libarchive) is required to extract .rar files but was not found on PATH"
+        ) from None
+    if result.returncode != 0:
+        raise RuntimeError(
+            result.stderr.strip() or f"bsdtar failed to extract {archive_path.name}"
+        )
     return _pcap_files(dest_dir)
 
 
@@ -38,7 +50,7 @@ def extract_archive(
 ) -> list[Path]:
     dest_dir.mkdir(parents=True, exist_ok=True)
     existing = _pcap_files(dest_dir)
-    if not cfg.overwrite and existing:
+    if not cfg.overwrite and any(p.stat().st_size > 0 for p in existing):
         logger.info(
             "Skipping extraction of %s (destination already has PCAPs)",
             archive_path.name,
@@ -51,14 +63,7 @@ def extract_archive(
             return extract_rar(archive_path, dest_dir)
         if suffix == ".zip":
             return extract_zip(archive_path, dest_dir)
-    except rarfile.RarCannotExec as exc:
-        logger.warning(
-            "Cannot extract %s: a system 'unrar'/'bsdtar' binary is required. %s",
-            archive_path.name,
-            exc,
-        )
-        return []
-    except (rarfile.Error, zipfile.BadZipFile) as exc:
+    except (RuntimeError, zipfile.BadZipFile) as exc:
         logger.warning("Failed to extract %s: %s", archive_path.name, exc)
         return []
 

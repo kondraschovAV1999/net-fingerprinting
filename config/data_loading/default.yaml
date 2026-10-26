@@ -14,19 +14,19 @@ datasets:
     version: 1
 
 # Which datasets to process. null = all; scalar or list accepted at runtime.
-selected_dataset_ids: null
+selected_dataset_ids: 96jwzrp7fd
 
 download:
   base_url: "https://data.mendeley.com/public-api/datasets"
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
   archive_extensions: [".rar", ".zip"]
   chunk_size: 8192
-  max_files: null
+  max_files: 1
 
 extract:
   overwrite: false
 
-filename_pattern: '^(?P<capture_timestamp>\d+)_(?P<application>.+)_(?P<download_speed>\d+(?:\.\d+)?)-(?P<upload_speed>\d+(?:\.\d+)?)\.pcap$'
+filename_pattern: '^(?P<capture_timestamp>\d+)_(?P<application>.+)_(?P<download_speed>\d+(?:\.\d+)?)[-_](?P<upload_speed>\d+(?:\.\d+)?)\.pcap$'
 
 parsing:
   packet_limit: 100000

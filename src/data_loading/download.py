@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from tqdm import tqdm
 
 from utils.schema.data_download import DatasetConfig, DownloadConfig
 
@@ -20,10 +21,13 @@ def list_dataset_files(
     base_url: str,
     user_agent: str,
 ) -> list[dict[str, Any]]:
-    url = f"{base_url}/{dataset_id}/versions/{version}"
+    url = f"{base_url}/{dataset_id}/files?folder_id=root&version={version}"
     response = requests.get(url, headers={"User-Agent": user_agent}, timeout=60)
     response.raise_for_status()
-    return response.json().get("files", [])
+    data = response.json()
+    if isinstance(data, list):
+        return data
+    return data.get("files", [])
 
 
 def filter_archives(
@@ -32,7 +36,9 @@ def filter_archives(
 ) -> list[dict[str, Any]]:
     extensions = {ext.lower() for ext in archive_extensions}
     return [
-        f for f in files if str(f.get("name", "")).lower().endswith(tuple(extensions))
+        f
+        for f in files
+        if str(f.get("filename", "")).lower().endswith(tuple(extensions))
     ]
 
 
@@ -60,10 +66,19 @@ def download_file(
             timeout=60,
         ) as response:
             response.raise_for_status()
+            total = int(response.headers.get("Content-Length", 0) or 0)
             with open(part_path, "wb") as out:
-                for chunk in response.iter_content(chunk_size=chunk_size):
-                    if chunk:
-                        out.write(chunk)
+                with tqdm(
+                    total=total,
+                    unit="B",
+                    unit_scale=True,
+                    unit_divisor=1024,
+                    desc=dest_path.name,
+                ) as pbar:
+                    for chunk in response.iter_content(chunk_size=chunk_size):
+                        if chunk:
+                            out.write(chunk)
+                            pbar.update(len(chunk))
         os.replace(part_path, dest_path)
     except requests.RequestException:
         part_path.unlink(missing_ok=True)
@@ -99,12 +114,16 @@ def download_dataset(
 
     downloaded: list[Path] = []
     for file_info in archives:
-        name = Path(file_info.get("name") or "archive.bin").name
+        name = Path(file_info.get("filename") or "archive.bin").name
         url = _resolve_download_url(file_info)
         if not url:
             logger.warning("Skipping %s: no download URL", name)
             continue
         dest_path = dest_dir / name
+        if dest_path.exists() and dest_path.stat().st_size > 0:
+            logger.info("Skipping download (already exists): %s", dest_path)
+            downloaded.append(dest_path)
+            continue
         try:
             downloaded.append(
                 download_file(url, dest_path, download.user_agent, download.chunk_size)

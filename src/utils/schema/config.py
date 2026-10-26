@@ -20,5 +20,5 @@ class DataLoadingConfig:
     paths: PathsConfig = field(default_factory=PathsConfig)
     filename_pattern: str = (
         r"^(?P<capture_timestamp>\d+)_(?P<application>.+)_"
-        r"(?P<download_speed>\d+(?:\.\d+)?)-(?P<upload_speed>\d+(?:\.\d+)?)\.pcap$"
+        r"(?P<download_speed>\d+(?:\.\d+)?)[-_](?P<upload_speed>\d+(?:\.\d+)?)\.pcap$"
     )

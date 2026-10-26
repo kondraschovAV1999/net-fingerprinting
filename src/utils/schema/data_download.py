@@ -13,7 +13,7 @@ class DatasetConfig:
 
 @dataclass
 class DownloadConfig:
-    base_url: str = "https://data.mendeley.com/public-api/datasets"
+    base_url: str = "https://api.data.mendeley.com/datasets"
     user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
