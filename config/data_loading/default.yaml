@@ -1,0 +1,41 @@
+# Dataset registry: maps each dataset_id -> metadata
+datasets:
+  - dataset_id: 96jwzrp7fd
+    name: Qom
+    version: 1
+  - dataset_id: 9frgkybxhn
+    name: Tehran_1
+    version: 1
+  - dataset_id: 4b9xpz4gd3
+    name: Tehran_2
+    version: 1
+  - dataset_id: zsffy3j9y6
+    name: Iraq
+    version: 1
+
+# Which datasets to process. null = all; scalar or list accepted at runtime.
+selected_dataset_ids: null
+
+download:
+  base_url: "https://data.mendeley.com/public-api/datasets"
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+  archive_extensions: [".rar", ".zip"]
+  chunk_size: 8192
+
+extract:
+  overwrite: false
+
+filename_pattern: '^(?P<capture_timestamp>\d+)_(?P<application>.+)_(?P<download_speed>\d+(?:\.\d+)?)-(?P<upload_speed>\d+(?:\.\d+)?)\.pcap$'
+
+parsing:
+  packet_limit: 100000
+
+paths:
+  raw_dir: "data/raw"
+  interim_dir: "data/interim"
+  processed_dir: "data/processed"
+  combined_csv: "data/processed/combined.csv"
+
+hydra:
+  job:
+    chdir: false
