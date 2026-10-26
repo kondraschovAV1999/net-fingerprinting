@@ -36,7 +36,8 @@ def filter_archives(
 
 
 def _resolve_download_url(file_info: dict[str, Any]) -> str | None:
-    url = file_info.get("content_details", {}).get("download_url")
+    content_details = file_info.get("content_details") or {}
+    url = content_details.get("download_url")
     if not url:
         url = file_info.get("download_url")
     return url
