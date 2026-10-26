@@ -37,18 +37,30 @@ def extract_archive(
     cfg: ExtractConfig,
 ) -> list[Path]:
     dest_dir.mkdir(parents=True, exist_ok=True)
-    if not cfg.overwrite and _pcap_files(dest_dir):
+    existing = _pcap_files(dest_dir)
+    if not cfg.overwrite and existing:
         logger.info(
             "Skipping extraction of %s (destination already has PCAPs)",
             archive_path.name,
         )
-        return _pcap_files(dest_dir)
+        return existing
 
     suffix = archive_path.suffix.lower()
-    if suffix == ".rar":
-        return extract_rar(archive_path, dest_dir)
-    if suffix == ".zip":
-        return extract_zip(archive_path, dest_dir)
+    try:
+        if suffix == ".rar":
+            return extract_rar(archive_path, dest_dir)
+        if suffix == ".zip":
+            return extract_zip(archive_path, dest_dir)
+    except rarfile.RarCannotExec as exc:
+        logger.warning(
+            "Cannot extract %s: a system 'unrar'/'bsdtar' binary is required. %s",
+            archive_path.name,
+            exc,
+        )
+        return []
+    except (rarfile.Error, zipfile.BadZipFile) as exc:
+        logger.warning("Failed to extract %s: %s", archive_path.name, exc)
+        return []
 
     logger.warning("Unsupported archive type: %s", suffix)
     return []

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -50,17 +51,23 @@ def download_file(
     chunk_size: int,
 ) -> Path:
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    with requests.get(
-        download_url,
-        headers={"User-Agent": user_agent},
-        stream=True,
-        timeout=60,
-    ) as response:
-        response.raise_for_status()
-        with open(dest_path, "wb") as out:
-            for chunk in response.iter_content(chunk_size=chunk_size):
-                if chunk:
-                    out.write(chunk)
+    part_path = dest_path.with_suffix(dest_path.suffix + ".part")
+    try:
+        with requests.get(
+            download_url,
+            headers={"User-Agent": user_agent},
+            stream=True,
+            timeout=60,
+        ) as response:
+            response.raise_for_status()
+            with open(part_path, "wb") as out:
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        out.write(chunk)
+        os.replace(part_path, dest_path)
+    except requests.RequestException:
+        part_path.unlink(missing_ok=True)
+        raise
     return dest_path
 
 
@@ -70,20 +77,29 @@ def download_dataset(
     dest_dir: Path,
 ) -> list[Path]:
     dest_dir.mkdir(parents=True, exist_ok=True)
-    files = list_dataset_files(
-        dataset.dataset_id,
-        dataset.version,
-        download.base_url,
-        download.user_agent,
-    )
+    try:
+        files = list_dataset_files(
+            dataset.dataset_id,
+            dataset.version,
+            download.base_url,
+            download.user_agent,
+        )
+    except requests.RequestException as exc:
+        logger.warning(
+            "Failed to list files for dataset %s: %s", dataset.dataset_id, exc
+        )
+        return []
+
     archives = filter_archives(files, download.archive_extensions)
+    if download.max_files is not None:
+        archives = archives[: download.max_files]
     if not archives:
         logger.warning("No archive files found for dataset %s", dataset.dataset_id)
         return []
 
     downloaded: list[Path] = []
     for file_info in archives:
-        name = file_info.get("name") or "archive.bin"
+        name = Path(file_info.get("name") or "archive.bin").name
         url = _resolve_download_url(file_info)
         if not url:
             logger.warning("Skipping %s: no download URL", name)

@@ -17,7 +17,7 @@ All settings live in `config/data_loading/default.yaml`:
 
 - `datasets` — registry of `dataset_id` → `name` / `version`.
 - `selected_dataset_ids` — `null` (all), a single id, or a list of ids.
-- `download` — API base URL, user agent, archive extensions, chunk size.
+- `download` — API base URL, user agent, archive extensions, chunk size, and `max_files` (max archives per dataset; `null` = all).
 - `extract` — whether to overwrite existing extractions.
 - `filename_pattern` — regex with named groups
   `capture_timestamp`, `application`, `download_speed`, `upload_speed`.
