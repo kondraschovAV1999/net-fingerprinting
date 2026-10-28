@@ -216,6 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Notebook download/parse artifacts (written next to the notebook when it runs outside Colab)
+iraq_sessions/
+extracted_pcaps/
+downloaded_file.rar
+all_packets_data.csv
+
 /data/
 /output/
 /logs/
