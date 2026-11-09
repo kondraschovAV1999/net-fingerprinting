@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import io
 import logging
+from typing import Any, Optional
 
 import requests
+
+from data_loading.parse_filename import parse_filename
 
 logger = logging.getLogger(__name__)
 
@@ -119,3 +122,39 @@ class RemoteRangeFile:
 
     def close(self) -> None:
         self.session.close()
+
+
+def select_application_members(
+    members: list[Any],
+    applications: Optional[list[str]],
+    filename_pattern: str,
+) -> list[str]:
+    """Return member names whose parsed application is in ``applications``.
+
+    ``None`` or empty ``applications`` selects all non-directory members.
+    Matching is case-insensitive; members whose names do not match
+    ``filename_pattern`` are skipped.
+    """
+    selected: Optional[set[str]] = None
+    if applications:
+        selected = {a.strip().lower() for a in applications}
+
+    result: list[str] = []
+    for member in members:
+        if hasattr(member, "is_dir") and member.is_dir():
+            continue
+        name = getattr(member, "filename", member)
+        if isinstance(name, bytes):
+            name = name.decode("utf-8", "replace")
+        name = str(name)
+        if selected is None:
+            result.append(name)
+            continue
+        try:
+            metadata = parse_filename(name, filename_pattern)
+        except ValueError:
+            logger.warning("Skipping %s: filename does not match convention", name)
+            continue
+        if metadata.application.strip().lower() in selected:
+            result.append(name)
+    return result

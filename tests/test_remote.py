@@ -87,3 +87,52 @@ def test_remote_range_file_read_and_seek():
         finally:
             f.close()
     assert server.requested_ranges  # range requests were actually used
+
+
+from data_loading import remote
+
+
+FILENAME_PATTERN = (
+    r"^(?P<capture_timestamp>\d+)_(?P<application>.+)_"
+    r"(?P<download_speed>\d+(?:\.\d+)?)[-_](?P<upload_speed>\d+(?:\.\d+)?)\.pcap$"
+)
+
+COPLIOT = "1711364914_Copilot_6.45_0.65.pcap"
+CHROME = "1711364914_Google Chrome_6.45_0.65.pcap"
+
+
+def test_select_all_when_none():
+    members = [COPLIOT, CHROME]
+    assert remote.select_application_members(members, None, FILENAME_PATTERN) == members
+
+
+def test_select_all_when_empty():
+    members = [COPLIOT, CHROME]
+    assert remote.select_application_members(members, [], FILENAME_PATTERN) == members
+
+
+def test_select_case_insensitive():
+    members = [COPLIOT, CHROME]
+    assert remote.select_application_members(
+        members, ["google chrome"], FILENAME_PATTERN
+    ) == [CHROME]
+
+
+def test_select_skips_unparseable():
+    members = [COPLIOT, "readme.txt"]
+    assert remote.select_application_members(
+        members, ["copilot"], FILENAME_PATTERN
+    ) == [COPLIOT]
+
+
+def test_select_skips_directories():
+    class _Dir:
+        filename = COPLIOT
+
+        def is_dir(self):
+            return True
+
+    members = [COPLIOT, _Dir()]
+    assert remote.select_application_members(
+        members, ["copilot"], FILENAME_PATTERN
+    ) == [COPLIOT]
