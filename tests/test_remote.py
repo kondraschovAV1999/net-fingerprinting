@@ -2,6 +2,8 @@ import io
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import pytest
+
 from data_loading.remote import RemoteRangeFile
 
 
@@ -344,4 +346,148 @@ def test_download_application_pcaps_skips_existing(monkeypatch, tmp_path):
 
     assert [p.name for p in result] == [CHROME]
     assert (interim / CHROME).read_bytes() == b"already-there"  # not overwritten
+    assert "download_file" not in calls
+
+
+class _TruncatingRangeServer(_RangeServer):
+    """Range server that returns at most 10 bytes regardless of the request."""
+
+    def _make_handler(self):
+        data = self.data
+        requested = self.requested_ranges
+
+        class _Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_HEAD(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Accept-Ranges", "bytes")
+                self.end_headers()
+
+            def do_GET(self):
+                header = self.headers.get("Range")
+                if header and header.startswith("bytes="):
+                    start_s, _, end_s = header[6:].partition("-")
+                    start = int(start_s)
+                    requested.append((start, end_s))
+                    body = data[start : start + 10]
+                    self.send_response(206)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.end_headers()
+                    self.wfile.write(data)
+
+        return _Handler
+
+
+def test_remote_range_file_short_read_raises():
+    data = bytes(range(256)) * 20
+    with _TruncatingRangeServer(data) as server:
+        f = RemoteRangeFile(server.url, "test-agent", block_size=1024)
+        try:
+            with pytest.raises(RuntimeError, match="Short read"):
+                f.read(100)
+        finally:
+            f.close()
+
+
+def test_select_application_members_accepts_bare_string():
+    members = [COPLIOT, CHROME]
+    assert remote.select_application_members(
+        members, "google chrome", FILENAME_PATTERN
+    ) == [CHROME]
+
+
+class _RarCannotExecRarFile(_FakeRarFile):
+    def open(self, name):
+        raise remote.rarfile.RarCannotExec("no tool")
+
+
+def test_download_application_pcaps_rar_cannot_exec_fallback(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote, "RemoteRangeFile", lambda url, ua: _FakeRemoteFile())
+    monkeypatch.setattr(remote.rarfile, "RarFile", lambda f: _RarCannotExecRarFile(f))
+    _stub_downloads(monkeypatch, ["Qom-01.rar"])
+
+    def fake_download_file(url, dest, ua, chunk):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"fake-rar")
+        return dest
+
+    monkeypatch.setattr(remote.download, "download_file", fake_download_file)
+    monkeypatch.setattr(
+        remote.extract,
+        "extract_archive",
+        lambda dest, out, cfg: [out / CHROME],
+    )
+
+    result = remote.download_application_pcaps(
+        _dataset(),
+        _download_cfg(solid_fallback=True),
+        ExtractConfig(),
+        ["google chrome"],
+        FILENAME_PATTERN,
+        tmp_path / "raw" / "Qom",
+        tmp_path / "interim" / "Qom",
+    )
+
+    assert [p.name for p in result] == [CHROME]
+    assert (tmp_path / "raw" / "Qom" / "Qom-01.rar").read_bytes() == b"fake-rar"
+
+
+def test_download_application_pcaps_rar_cannot_exec_skip(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote, "RemoteRangeFile", lambda url, ua: _FakeRemoteFile())
+    monkeypatch.setattr(remote.rarfile, "RarFile", lambda f: _RarCannotExecRarFile(f))
+    _stub_downloads(monkeypatch, ["Qom-01.rar"])
+    calls = {}
+    monkeypatch.setattr(remote.download, "download_file", _count_calls(calls))
+
+    result = remote.download_application_pcaps(
+        _dataset(),
+        _download_cfg(solid_fallback=False),
+        ExtractConfig(),
+        ["google chrome"],
+        FILENAME_PATTERN,
+        tmp_path / "raw" / "Qom",
+        tmp_path / "interim" / "Qom",
+    )
+
+    assert result == []
+    assert "download_file" not in calls
+
+
+def test_download_application_pcaps_unwritable_member_skipped(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote, "RemoteRangeFile", lambda url, ua: _FakeRemoteFile())
+    monkeypatch.setattr(remote.rarfile, "RarFile", lambda f: _FakeRarFile(f))
+    _stub_downloads(monkeypatch, ["Qom-01.rar"])
+    calls = {}
+    monkeypatch.setattr(remote.download, "download_file", _count_calls(calls))
+
+    real_open = open
+
+    def fake_open(file, mode="r", *args, **kwargs):
+        if "w" in mode:
+            raise OSError("disk full")
+        return real_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+
+    result = remote.download_application_pcaps(
+        _dataset(),
+        _download_cfg(solid_fallback=False),
+        ExtractConfig(),
+        ["google chrome"],
+        FILENAME_PATTERN,
+        tmp_path / "raw" / "Qom",
+        tmp_path / "interim" / "Qom",
+    )
+
+    assert result == []
     assert "download_file" not in calls

@@ -90,6 +90,10 @@ class RemoteRangeFile:
             block = self._fetch_block(block_id)
             offset = self.position % self.block_size
             count = min(end - self.position, len(block) - offset)
+            if count <= 0:
+                raise RuntimeError(
+                    f"Short read from {self.url} at offset {self.position}"
+                )
             result.extend(block[offset : offset + count])
             self.position += count
             self._evict_cache()
@@ -141,6 +145,8 @@ def select_application_members(
     Matching is case-insensitive; members whose names do not match
     ``filename_pattern`` are skipped.
     """
+    if isinstance(applications, str):
+        applications = [applications]
     selected: Optional[set[str]] = None
     if applications:
         selected = {a.strip().lower() for a in applications}
@@ -217,18 +223,41 @@ def download_application_pcaps(
             continue
         try:
             if Path(name).suffix.lower() == ".rar":
-                collect(
-                    _selective_rar(
-                        name,
-                        url,
-                        download_cfg,
-                        extract_cfg,
-                        applications,
-                        filename_pattern,
-                        raw_dir,
-                        interim_dir,
+                try:
+                    collect(
+                        _selective_rar(
+                            name,
+                            url,
+                            download_cfg,
+                            extract_cfg,
+                            applications,
+                            filename_pattern,
+                            raw_dir,
+                            interim_dir,
+                        )
                     )
-                )
+                except rarfile.RarCannotExec:
+                    if download_cfg.solid_fallback:
+                        logger.info(
+                            "No RAR decompressor for %s; falling back to full download",
+                            name,
+                        )
+                        collect(
+                            _full_download(
+                                name,
+                                url,
+                                download_cfg,
+                                extract_cfg,
+                                applications,
+                                filename_pattern,
+                                raw_dir,
+                                interim_dir,
+                            )
+                        )
+                    else:
+                        logger.warning(
+                            "No RAR decompressor available for %s; skipping", name
+                        )
             else:
                 collect(
                     _full_download(
@@ -242,7 +271,12 @@ def download_application_pcaps(
                         interim_dir,
                     )
                 )
-        except (requests.RequestException, rarfile.Error, RuntimeError) as exc:
+        except (
+            requests.RequestException,
+            rarfile.Error,
+            RuntimeError,
+            OSError,
+        ) as exc:
             logger.warning("Failed to process %s: %s", name, exc)
 
     return downloaded
@@ -264,6 +298,8 @@ def _full_download(
             url, dest, download_cfg.user_agent, download_cfg.chunk_size
         )
     pcaps = extract.extract_archive(dest, interim_dir, extract_cfg)
+    if isinstance(applications, str):
+        applications = [applications]
     if not applications:
         return pcaps
     wanted = {a.strip().lower() for a in applications}
@@ -327,8 +363,12 @@ def _selective_rar(
                     result.append(dest)
                     continue
                 with archive.open(member_name) as src:
-                    with open(dest, "wb") as dst:
-                        shutil.copyfileobj(src, dst)
+                    try:
+                        with open(dest, "wb") as dst:
+                            shutil.copyfileobj(src, dst)
+                    except OSError as exc:
+                        logger.warning("Failed to extract %s: %s", member_name, exc)
+                        continue
                 logger.info(
                     "Extracted %s -> %s (%d bytes)",
                     member_name,
