@@ -6,6 +6,7 @@ a combined CSV.
 ## Modules
 
 - `download.py` — lists files via the Mendeley public API and downloads `.rar`/`.zip` archives.
+- `remote.py` — downloads only the PCAPs matching a configured application list, reading non-solid RAR members over HTTP Range; solid/non-RAR archives fall back to full download.
 - `extract.py` — extracts `.rar`/`.zip` archives into a target directory.
 - `parse_filename.py` — parses a PCAP filename into `FilenameMetadata`.
 - `parse_pcap.py` — streams PCAP packets into a pandas DataFrame.
@@ -18,6 +19,8 @@ All settings live in `config/data_loading/default.yaml`:
 - `datasets` — registry of `dataset_id` → `name` / `version`.
 - `selected_dataset_ids` — `null` (all), a single id, or a list of ids.
 - `download` — API base URL, user agent, archive extensions, chunk size, and `max_files` (max archives per dataset; `null` = all).
+- `applications` — `null`/`[]` (all) or a list of application names to download; matching is case-insensitive.
+- `download.solid_fallback` — `true` to full-download solid archives, `false` to skip them.
 - `extract` — whether to overwrite existing extractions.
 - `filename_pattern` — regex with named groups
   `capture_timestamp`, `application`, `download_speed`, `upload_speed`.

@@ -8,7 +8,8 @@ from typing import Any
 
 import pandas as pd
 
-from data_loading import download, extract, parse_filename, parse_pcap
+from data_loading import parse_filename, parse_pcap
+from data_loading.remote import download_application_pcaps
 from utils.schema.config import DataLoadingConfig
 from utils.schema.data_download import DatasetConfig
 
@@ -45,11 +46,15 @@ def _process_dataset(
     processed_dir = Path(config.paths.processed_dir) / dataset.name
     processed_dir.mkdir(parents=True, exist_ok=True)
 
-    archives = download.download_dataset(dataset, config.download, raw_dir)
-
-    pcap_paths: list[Path] = []
-    for archive in archives:
-        pcap_paths.extend(extract.extract_archive(archive, interim_dir, config.extract))
+    pcap_paths = download_application_pcaps(
+        dataset,
+        config.download,
+        config.extract,
+        config.applications,
+        config.filename_pattern,
+        raw_dir,
+        interim_dir,
+    )
 
     frames: list[pd.DataFrame] = []
     for pcap_path in pcap_paths:
