@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import io
 import logging
+import shutil
+from pathlib import Path
 from typing import Any, Optional
 
+import rarfile
 import requests
 
+from data_loading import download, extract
 from data_loading.parse_filename import parse_filename
+from utils.schema.data_download import DatasetConfig, DownloadConfig
+from utils.schema.extraction import ExtractConfig
 
 logger = logging.getLogger(__name__)
 
@@ -158,3 +164,180 @@ def select_application_members(
         if metadata.application.strip().lower() in selected:
             result.append(name)
     return result
+
+
+def download_application_pcaps(
+    dataset: DatasetConfig,
+    download_cfg: DownloadConfig,
+    extract_cfg: ExtractConfig,
+    applications: Optional[list[str]],
+    filename_pattern: str,
+    raw_dir: Path,
+    interim_dir: Path,
+) -> list[Path]:
+    """Download only the PCAPs matching ``applications`` from ``dataset``.
+
+    Non-solid RARs are read remotely via HTTP Range and only matching members
+    are extracted. Solid (or non-RAR) archives fall back to full download.
+    """
+    interim_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        files = download.list_dataset_files(
+            dataset.dataset_id,
+            dataset.version,
+            download_cfg.base_url,
+            download_cfg.user_agent,
+        )
+    except requests.RequestException as exc:
+        logger.warning(
+            "Failed to list files for dataset %s: %s", dataset.dataset_id, exc
+        )
+        return []
+
+    archives = download.filter_archives(files, download_cfg.archive_extensions)
+    if download_cfg.max_files is not None:
+        archives = archives[: download_cfg.max_files]
+
+    seen: set[str] = set()
+    downloaded: list[Path] = []
+
+    def collect(paths: list[Path]) -> None:
+        for p in paths:
+            key = str(p)
+            if key not in seen:
+                seen.add(key)
+                downloaded.append(p)
+
+    for file_info in archives:
+        name = Path(file_info.get("filename") or "archive.bin").name
+        url = download.resolve_download_url(file_info)
+        if not url:
+            logger.warning("Skipping %s: no download URL", name)
+            continue
+        try:
+            if Path(name).suffix.lower() == ".rar":
+                collect(
+                    _selective_rar(
+                        name,
+                        url,
+                        download_cfg,
+                        extract_cfg,
+                        applications,
+                        filename_pattern,
+                        raw_dir,
+                        interim_dir,
+                    )
+                )
+            else:
+                collect(
+                    _full_download(
+                        name,
+                        url,
+                        download_cfg,
+                        extract_cfg,
+                        applications,
+                        filename_pattern,
+                        raw_dir,
+                        interim_dir,
+                    )
+                )
+        except (requests.RequestException, rarfile.Error, RuntimeError) as exc:
+            logger.warning("Failed to process %s: %s", name, exc)
+
+    return downloaded
+
+
+def _full_download(
+    name: str,
+    url: str,
+    download_cfg: DownloadConfig,
+    extract_cfg: ExtractConfig,
+    applications: Optional[list[str]],
+    filename_pattern: str,
+    raw_dir: Path,
+    interim_dir: Path,
+) -> list[Path]:
+    dest = raw_dir / name
+    if not (dest.exists() and dest.stat().st_size > 0):
+        download.download_file(
+            url, dest, download_cfg.user_agent, download_cfg.chunk_size
+        )
+    pcaps = extract.extract_archive(dest, interim_dir, extract_cfg)
+    if not applications:
+        return pcaps
+    wanted = {a.strip().lower() for a in applications}
+    kept: list[Path] = []
+    for p in pcaps:
+        try:
+            meta = parse_filename(p.name, filename_pattern)
+        except ValueError:
+            continue
+        if meta.application.strip().lower() in wanted:
+            kept.append(p)
+    return kept
+
+
+def _selective_rar(
+    name: str,
+    url: str,
+    download_cfg: DownloadConfig,
+    extract_cfg: ExtractConfig,
+    applications: Optional[list[str]],
+    filename_pattern: str,
+    raw_dir: Path,
+    interim_dir: Path,
+) -> list[Path]:
+    remote_file = RemoteRangeFile(url, download_cfg.user_agent)
+    try:
+        archive = rarfile.RarFile(remote_file)
+        try:
+            if archive.is_solid():
+                if download_cfg.solid_fallback:
+                    logger.info(
+                        "Archive %s is solid; falling back to full download", name
+                    )
+                    return _full_download(
+                        name,
+                        url,
+                        download_cfg,
+                        extract_cfg,
+                        applications,
+                        filename_pattern,
+                        raw_dir,
+                        interim_dir,
+                    )
+                logger.warning(
+                    "Archive %s is solid; skipping (solid_fallback=False)", name
+                )
+                return []
+
+            member_names = select_application_members(
+                archive.infolist(), applications, filename_pattern
+            )
+            result: list[Path] = []
+            for member_name in member_names:
+                dest = interim_dir / Path(member_name).name
+                if (
+                    dest.exists()
+                    and dest.stat().st_size > 0
+                    and not extract_cfg.overwrite
+                ):
+                    logger.info("Skipping %s (already exists)", dest)
+                    result.append(dest)
+                    continue
+                with archive.open(member_name) as src:
+                    with open(dest, "wb") as dst:
+                        shutil.copyfileobj(src, dst)
+                logger.info(
+                    "Extracted %s -> %s (%d bytes)",
+                    member_name,
+                    dest,
+                    dest.stat().st_size,
+                )
+                result.append(dest)
+            return result
+        finally:
+            archive.close()
+    finally:
+        remote_file.close()

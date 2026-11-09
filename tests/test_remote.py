@@ -136,3 +136,212 @@ def test_select_skips_directories():
     assert remote.select_application_members(
         members, ["copilot"], FILENAME_PATTERN
     ) == [COPLIOT]
+
+
+from utils.schema.data_download import DatasetConfig, DownloadConfig
+from utils.schema.extraction import ExtractConfig
+
+
+def _dataset():
+    return DatasetConfig(dataset_id="96jwzrp7fd", name="Qom", version=1)
+
+
+def _download_cfg(**overrides):
+    defaults = {"solid_fallback": True}
+    defaults.update(overrides)
+    return DownloadConfig(**defaults)
+
+
+class _FakeMember:
+    def __init__(self, name, is_dir=False):
+        self.filename = name
+        self._is_dir = is_dir
+
+    def is_dir(self):
+        return self._is_dir
+
+
+class _FakeRarFile:
+    def __init__(self, fileobj):
+        self.fileobj = fileobj
+        self.solid = False
+
+    def is_solid(self):
+        return self.solid
+
+    def infolist(self):
+        return [_FakeMember(COPLIOT), _FakeMember(CHROME)]
+
+    def getinfo(self, name):
+        return _FakeMember(name)
+
+    def open(self, name):
+        return io.BytesIO(b"pcap-bytes-" + name.encode())
+
+    def close(self):
+        pass
+
+
+def _solid_rar_factory(fileobj):
+    rar = _FakeRarFile(fileobj)
+    rar.solid = True
+    return rar
+
+
+class _FakeRemoteFile:
+    def close(self):
+        pass
+
+
+def _count_calls(calls):
+    def _download_file(url, dest, ua, chunk):
+        calls["download_file"] = calls.get("download_file", 0) + 1
+        return dest
+
+    return _download_file
+
+
+def _stub_downloads(monkeypatch, filenames):
+    monkeypatch.setattr(
+        remote.download,
+        "list_dataset_files",
+        lambda *a, **k: [{"filename": name} for name in filenames],
+    )
+    monkeypatch.setattr(remote.download, "filter_archives", lambda files, exts: files)
+    monkeypatch.setattr(
+        remote.download,
+        "resolve_download_url",
+        lambda info: "http://example.com/" + info["filename"],
+    )
+
+
+def test_download_application_pcaps_selective(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote, "RemoteRangeFile", lambda url, ua: _FakeRemoteFile())
+    monkeypatch.setattr(remote.rarfile, "RarFile", lambda f: _FakeRarFile(f))
+    _stub_downloads(monkeypatch, ["Qom-01.rar"])
+    calls = {}
+    monkeypatch.setattr(remote.download, "download_file", _count_calls(calls))
+
+    raw = tmp_path / "raw" / "Qom"
+    interim = tmp_path / "interim" / "Qom"
+
+    result = remote.download_application_pcaps(
+        _dataset(),
+        _download_cfg(),
+        ExtractConfig(),
+        ["google chrome"],
+        FILENAME_PATTERN,
+        raw,
+        interim,
+    )
+
+    assert [p.name for p in result] == [CHROME]
+    assert (interim / CHROME).read_bytes() == b"pcap-bytes-" + CHROME.encode()
+    assert not (interim / COPLIOT).exists()
+    assert "download_file" not in calls  # no full download
+
+
+def test_download_application_pcaps_solid_fallback(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote, "RemoteRangeFile", lambda url, ua: _FakeRemoteFile())
+    monkeypatch.setattr(remote.rarfile, "RarFile", _solid_rar_factory)
+    _stub_downloads(monkeypatch, ["Qom-01.rar"])
+
+    def fake_download_file(url, dest, ua, chunk):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"fake-rar")
+        return dest
+
+    monkeypatch.setattr(remote.download, "download_file", fake_download_file)
+    monkeypatch.setattr(
+        remote.extract,
+        "extract_archive",
+        lambda dest, out, cfg: [out / COPLIOT],
+    )
+
+    result = remote.download_application_pcaps(
+        _dataset(),
+        _download_cfg(solid_fallback=True),
+        ExtractConfig(),
+        ["copilot"],
+        FILENAME_PATTERN,
+        tmp_path / "raw" / "Qom",
+        tmp_path / "interim" / "Qom",
+    )
+
+    assert [p.name for p in result] == [COPLIOT]
+    assert (tmp_path / "raw" / "Qom" / "Qom-01.rar").read_bytes() == b"fake-rar"
+
+
+def test_download_application_pcaps_solid_skip(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote, "RemoteRangeFile", lambda url, ua: _FakeRemoteFile())
+    monkeypatch.setattr(remote.rarfile, "RarFile", _solid_rar_factory)
+    _stub_downloads(monkeypatch, ["Qom-01.rar"])
+    calls = {}
+    monkeypatch.setattr(remote.download, "download_file", _count_calls(calls))
+
+    result = remote.download_application_pcaps(
+        _dataset(),
+        _download_cfg(solid_fallback=False),
+        ExtractConfig(),
+        ["copilot"],
+        FILENAME_PATTERN,
+        tmp_path / "raw" / "Qom",
+        tmp_path / "interim" / "Qom",
+    )
+
+    assert result == []
+    assert "download_file" not in calls
+
+
+def test_download_application_pcaps_zip_fallback(monkeypatch, tmp_path):
+    _stub_downloads(monkeypatch, ["Qom-01.zip"])
+
+    def fake_download_file(url, dest, ua, chunk):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"zip")
+        return dest
+
+    monkeypatch.setattr(remote.download, "download_file", fake_download_file)
+    monkeypatch.setattr(
+        remote.extract,
+        "extract_archive",
+        lambda dest, out, cfg: [out / COPLIOT, out / CHROME],
+    )
+
+    result = remote.download_application_pcaps(
+        _dataset(),
+        _download_cfg(),
+        ExtractConfig(),
+        ["copilot"],
+        FILENAME_PATTERN,
+        tmp_path / "raw" / "Qom",
+        tmp_path / "interim" / "Qom",
+    )
+
+    assert [p.name for p in result] == [COPLIOT]
+
+
+def test_download_application_pcaps_skips_existing(monkeypatch, tmp_path):
+    monkeypatch.setattr(remote, "RemoteRangeFile", lambda url, ua: _FakeRemoteFile())
+    monkeypatch.setattr(remote.rarfile, "RarFile", lambda f: _FakeRarFile(f))
+    _stub_downloads(monkeypatch, ["Qom-01.rar"])
+    calls = {}
+    monkeypatch.setattr(remote.download, "download_file", _count_calls(calls))
+
+    interim = tmp_path / "interim" / "Qom"
+    interim.mkdir(parents=True, exist_ok=True)
+    (interim / CHROME).write_bytes(b"already-there")
+
+    result = remote.download_application_pcaps(
+        _dataset(),
+        _download_cfg(),
+        ExtractConfig(),
+        ["google chrome"],
+        FILENAME_PATTERN,
+        tmp_path / "raw" / "Qom",
+        interim,
+    )
+
+    assert [p.name for p in result] == [CHROME]
+    assert (interim / CHROME).read_bytes() == b"already-there"  # not overwritten
+    assert "download_file" not in calls

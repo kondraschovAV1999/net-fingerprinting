@@ -42,7 +42,7 @@ def filter_archives(
     ]
 
 
-def _resolve_download_url(file_info: dict[str, Any]) -> str | None:
+def resolve_download_url(file_info: dict[str, Any]) -> str | None:
     content_details = file_info.get("content_details") or {}
     url = content_details.get("download_url")
     if not url:
@@ -115,7 +115,7 @@ def download_dataset(
     downloaded: list[Path] = []
     for file_info in archives:
         name = Path(file_info.get("filename") or "archive.bin").name
-        url = _resolve_download_url(file_info)
+        url = resolve_download_url(file_info)
         if not url:
             logger.warning("Skipping %s: no download URL", name)
             continue
