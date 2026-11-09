@@ -16,12 +16,16 @@ datasets:
 # Which datasets to process. null = all; scalar or list accepted at runtime.
 selected_dataset_ids: 96jwzrp7fd
 
+# None or [] = all applications (no filtering).
+applications: ["Google Chrome", "Copilot"]
+
 download:
   base_url: "https://data.mendeley.com/public-api/datasets"
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
   archive_extensions: [".rar", ".zip"]
   chunk_size: 8192
   max_files: 1
+  solid_fallback: true
 
 extract:
   overwrite: false

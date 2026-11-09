@@ -22,3 +22,4 @@ class DownloadConfig:
     archive_extensions: list[str] = field(default_factory=lambda: [".rar", ".zip"])
     chunk_size: int = 8192
     max_files: Optional[int] = None
+    solid_fallback: bool = True
