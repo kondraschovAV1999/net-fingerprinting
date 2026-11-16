@@ -1,0 +1,36 @@
+# Classical classification stage.
+#
+# models: which scikit-learn classifiers to run, with hyperparameters.
+#   Available names: decision_tree, random_forest, linear, knn, svm.
+models:
+  - name: decision_tree
+    enabled: true
+    params: {}
+  - name: random_forest
+    enabled: true
+    params: { n_estimators: 100 }
+  - name: linear
+    enabled: true
+    params: { max_iter: 1000 }
+  - name: knn
+    enabled: true
+    params: { n_neighbors: 5 }
+  - name: svm
+    enabled: true
+    params: {}
+
+# zero_division for F1 / precision / recall on classes with no predictions.
+zero_division: 0
+
+# Feature extraction settings (see config/preprocessing).
+feature_config: statistical   # foap | basic | statistical
+rate_interval: 1.0
+interactive_bins: 20
+
+# Split settings (see config/data_splitting).
+ratios: [0.7, 0.15, 0.15]
+dataset_scope: combined        # combined | per_dataset
+
+# Input / output paths.
+combined_csv: data/processed/combined.csv
+metrics_csv: data/processed/metrics.csv
