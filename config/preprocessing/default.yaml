@@ -1,0 +1,14 @@
+# Flow feature extraction (FOAP-style).
+#
+# feature_config selects a named preset from
+# preprocessing.feature_extraction.FEATURE_CONFIGS:
+#   - foap        : all groups (123 features)
+#   - basic       : general only (8 features)
+#   - statistical : general + packet_rate + temporal + packet_size (103 features)
+feature_config: statistical
+
+# Packet-rate window size in seconds (FOAP uses 1.0).
+rate_interval: 1.0
+
+# Number of bins used to sample the interactive pattern (FOAP uses 20).
+interactive_bins: 20

@@ -21,6 +21,7 @@ All settings live in `config/data_loading/default.yaml`:
 - `download` — API base URL, user agent, archive extensions, chunk size, and `max_files` (max archives per dataset; `null` = all).
 - `applications` — `null`/`[]` (all) or a list of application names to download; matching is case-insensitive.
 - `download.solid_fallback` — `true` to full-download solid archives, `false` to skip them.
+- `download.sevenzip_path` — path to `7z.exe` used for selective RAR extraction; `null` auto-detects (`7z`/`7zz` on PATH, then the default Windows install location).
 - `extract` — whether to overwrite existing extractions.
 - `filename_pattern` — regex with named groups
   `capture_timestamp`, `application`, `download_speed`, `upload_speed`.

@@ -92,15 +92,11 @@ def test_remote_range_file_read_and_seek():
 
 
 from data_loading import remote
-
-
-FILENAME_PATTERN = (
-    r"^(?P<capture_timestamp>\d+)_(?P<application>.+)_"
-    r"(?P<download_speed>\d+(?:\.\d+)?)[-_](?P<upload_speed>\d+(?:\.\d+)?)\.pcap$"
-)
+from utils.schema.parsing import DEFAULT_FILENAME_PATTERN as FILENAME_PATTERN
 
 COPLIOT = "1711364914_Copilot_6.45_0.65.pcap"
 CHROME = "1711364914_Google Chrome_6.45_0.65.pcap"
+TELEGRAM_TRAILING = "1712045358_Telegram_3.69-3.11_.pcap"
 
 
 def test_select_all_when_none():
@@ -140,6 +136,13 @@ def test_select_skips_directories():
     ) == [COPLIOT]
 
 
+def test_select_tolerates_trailing_underscore_before_extension():
+    members = [TELEGRAM_TRAILING]
+    assert remote.select_application_members(
+        members, ["telegram"], FILENAME_PATTERN
+    ) == [TELEGRAM_TRAILING]
+
+
 from utils.schema.data_download import DatasetConfig, DownloadConfig
 from utils.schema.extraction import ExtractConfig
 
@@ -155,9 +158,12 @@ def _download_cfg(**overrides):
 
 
 class _FakeMember:
-    def __init__(self, name, is_dir=False):
+    def __init__(self, name, is_dir=False, data_offset=0, compress_size=1, file_size=1):
         self.filename = name
         self._is_dir = is_dir
+        self.data_offset = data_offset
+        self.compress_size = compress_size
+        self.file_size = file_size
 
     def is_dir(self):
         return self._is_dir
@@ -177,9 +183,6 @@ class _FakeRarFile:
     def getinfo(self, name):
         return _FakeMember(name)
 
-    def open(self, name):
-        return io.BytesIO(b"pcap-bytes-" + name.encode())
-
     def close(self):
         pass
 
@@ -191,6 +194,12 @@ def _solid_rar_factory(fileobj):
 
 
 class _FakeRemoteFile:
+    def seek(self, offset, whence=0):
+        return offset
+
+    def read(self, size=-1):
+        return b"\0" * max(size, 0)
+
     def close(self):
         pass
 
@@ -217,10 +226,31 @@ def _stub_downloads(monkeypatch, filenames):
     )
 
 
+def _stub_sevenzip(monkeypatch):
+    monkeypatch.setattr(remote, "_resolve_sevenzip", lambda cfg=None: "7z.exe")
+
+
+def _stub_sparse_and_extract(monkeypatch, tmp_path, payload=b"pcap-bytes-"):
+    monkeypatch.setattr(
+        remote, "_write_sparse_archive", lambda rf, name: tmp_path / "sparse.rar"
+    )
+
+    def _fake_extract(sevenzip, sparse, member, dest):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(payload + member.encode())
+        return dest
+
+    monkeypatch.setattr(remote, "_extract_member_7z", _fake_extract)
+
+
 def test_download_application_pcaps_selective(monkeypatch, tmp_path):
-    monkeypatch.setattr(remote, "RemoteRangeFile", lambda url, ua: _FakeRemoteFile())
+    monkeypatch.setattr(
+        remote, "RemoteRangeFile", lambda url, ua, **kw: _FakeRemoteFile()
+    )
     monkeypatch.setattr(remote.rarfile, "RarFile", lambda f: _FakeRarFile(f))
     _stub_downloads(monkeypatch, ["Qom-01.rar"])
+    _stub_sevenzip(monkeypatch)
+    _stub_sparse_and_extract(monkeypatch, tmp_path)
     calls = {}
     monkeypatch.setattr(remote.download, "download_file", _count_calls(calls))
 
@@ -244,7 +274,9 @@ def test_download_application_pcaps_selective(monkeypatch, tmp_path):
 
 
 def test_download_application_pcaps_solid_fallback(monkeypatch, tmp_path):
-    monkeypatch.setattr(remote, "RemoteRangeFile", lambda url, ua: _FakeRemoteFile())
+    monkeypatch.setattr(
+        remote, "RemoteRangeFile", lambda url, ua, **kw: _FakeRemoteFile()
+    )
     monkeypatch.setattr(remote.rarfile, "RarFile", _solid_rar_factory)
     _stub_downloads(monkeypatch, ["Qom-01.rar"])
 
@@ -275,7 +307,9 @@ def test_download_application_pcaps_solid_fallback(monkeypatch, tmp_path):
 
 
 def test_download_application_pcaps_solid_skip(monkeypatch, tmp_path):
-    monkeypatch.setattr(remote, "RemoteRangeFile", lambda url, ua: _FakeRemoteFile())
+    monkeypatch.setattr(
+        remote, "RemoteRangeFile", lambda url, ua, **kw: _FakeRemoteFile()
+    )
     monkeypatch.setattr(remote.rarfile, "RarFile", _solid_rar_factory)
     _stub_downloads(monkeypatch, ["Qom-01.rar"])
     calls = {}
@@ -324,7 +358,9 @@ def test_download_application_pcaps_zip_fallback(monkeypatch, tmp_path):
 
 
 def test_download_application_pcaps_skips_existing(monkeypatch, tmp_path):
-    monkeypatch.setattr(remote, "RemoteRangeFile", lambda url, ua: _FakeRemoteFile())
+    monkeypatch.setattr(
+        remote, "RemoteRangeFile", lambda url, ua, **kw: _FakeRemoteFile()
+    )
     monkeypatch.setattr(remote.rarfile, "RarFile", lambda f: _FakeRarFile(f))
     _stub_downloads(monkeypatch, ["Qom-01.rar"])
     calls = {}
@@ -406,52 +442,23 @@ def test_select_application_members_accepts_bare_string():
     ) == [CHROME]
 
 
-class _RarCannotExecRarFile(_FakeRarFile):
-    def open(self, name):
-        raise remote.rarfile.RarCannotExec("no tool")
-
-
-def test_download_application_pcaps_rar_cannot_exec_fallback(monkeypatch, tmp_path):
-    monkeypatch.setattr(remote, "RemoteRangeFile", lambda url, ua: _FakeRemoteFile())
-    monkeypatch.setattr(remote.rarfile, "RarFile", lambda f: _RarCannotExecRarFile(f))
-    _stub_downloads(monkeypatch, ["Qom-01.rar"])
-
-    def fake_download_file(url, dest, ua, chunk):
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(b"fake-rar")
-        return dest
-
-    monkeypatch.setattr(remote.download, "download_file", fake_download_file)
+def test_download_application_pcaps_missing_sevenzip_skips(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        remote.extract,
-        "extract_archive",
-        lambda dest, out, cfg: [out / CHROME],
+        remote, "RemoteRangeFile", lambda url, ua, **kw: _FakeRemoteFile()
     )
-
-    result = remote.download_application_pcaps(
-        _dataset(),
-        _download_cfg(solid_fallback=True),
-        ExtractConfig(),
-        ["google chrome"],
-        FILENAME_PATTERN,
-        tmp_path / "raw" / "Qom",
-        tmp_path / "interim" / "Qom",
-    )
-
-    assert [p.name for p in result] == [CHROME]
-    assert (tmp_path / "raw" / "Qom" / "Qom-01.rar").read_bytes() == b"fake-rar"
-
-
-def test_download_application_pcaps_rar_cannot_exec_skip(monkeypatch, tmp_path):
-    monkeypatch.setattr(remote, "RemoteRangeFile", lambda url, ua: _FakeRemoteFile())
-    monkeypatch.setattr(remote.rarfile, "RarFile", lambda f: _RarCannotExecRarFile(f))
+    monkeypatch.setattr(remote.rarfile, "RarFile", lambda f: _FakeRarFile(f))
     _stub_downloads(monkeypatch, ["Qom-01.rar"])
+
+    def _no_sevenzip(cfg=None):
+        raise RuntimeError("7-Zip not found")
+
+    monkeypatch.setattr(remote, "_resolve_sevenzip", _no_sevenzip)
     calls = {}
     monkeypatch.setattr(remote.download, "download_file", _count_calls(calls))
 
     result = remote.download_application_pcaps(
         _dataset(),
-        _download_cfg(solid_fallback=False),
+        _download_cfg(),
         ExtractConfig(),
         ["google chrome"],
         FILENAME_PATTERN,
@@ -464,9 +471,15 @@ def test_download_application_pcaps_rar_cannot_exec_skip(monkeypatch, tmp_path):
 
 
 def test_download_application_pcaps_unwritable_member_skipped(monkeypatch, tmp_path):
-    monkeypatch.setattr(remote, "RemoteRangeFile", lambda url, ua: _FakeRemoteFile())
+    monkeypatch.setattr(
+        remote, "RemoteRangeFile", lambda url, ua, **kw: _FakeRemoteFile()
+    )
     monkeypatch.setattr(remote.rarfile, "RarFile", lambda f: _FakeRarFile(f))
     _stub_downloads(monkeypatch, ["Qom-01.rar"])
+    _stub_sevenzip(monkeypatch)
+    monkeypatch.setattr(
+        remote, "_write_sparse_archive", lambda rf, name: tmp_path / "sparse.rar"
+    )
     calls = {}
     monkeypatch.setattr(remote.download, "download_file", _count_calls(calls))
 

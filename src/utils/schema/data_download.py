@@ -23,3 +23,4 @@ class DownloadConfig:
     chunk_size: int = 8192
     max_files: Optional[int] = None
     solid_fallback: bool = True
+    sevenzip_path: Optional[str] = None

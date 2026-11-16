@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -32,10 +35,12 @@ class RemoteRangeFile:
         user_agent: str,
         block_size: int = 1 << 20,
         timeout: int = 60,
+        evict: bool = True,
     ) -> None:
         self.url = url
         self.block_size = block_size
         self.timeout = timeout
+        self._evict = evict
         self.session = requests.Session()
         self.session.headers.update(
             {"User-Agent": user_agent, "Accept-Encoding": "identity"}
@@ -120,6 +125,8 @@ class RemoteRangeFile:
         return self.cache[block_id]
 
     def _evict_cache(self) -> None:
+        if not self._evict:
+            return
         current_block = self.position // self.block_size
         for block_id in [b for b in self.cache if b < current_block]:
             del self.cache[block_id]
@@ -223,41 +230,18 @@ def download_application_pcaps(
             continue
         try:
             if Path(name).suffix.lower() == ".rar":
-                try:
-                    collect(
-                        _selective_rar(
-                            name,
-                            url,
-                            download_cfg,
-                            extract_cfg,
-                            applications,
-                            filename_pattern,
-                            raw_dir,
-                            interim_dir,
-                        )
+                collect(
+                    _selective_rar(
+                        name,
+                        url,
+                        download_cfg,
+                        extract_cfg,
+                        applications,
+                        filename_pattern,
+                        raw_dir,
+                        interim_dir,
                     )
-                except rarfile.RarCannotExec:
-                    if download_cfg.solid_fallback:
-                        logger.info(
-                            "No RAR decompressor for %s; falling back to full download",
-                            name,
-                        )
-                        collect(
-                            _full_download(
-                                name,
-                                url,
-                                download_cfg,
-                                extract_cfg,
-                                applications,
-                                filename_pattern,
-                                raw_dir,
-                                interim_dir,
-                            )
-                        )
-                    else:
-                        logger.warning(
-                            "No RAR decompressor available for %s; skipping", name
-                        )
+                )
             else:
                 collect(
                     _full_download(
@@ -314,6 +298,79 @@ def _full_download(
     return kept
 
 
+def _resolve_sevenzip(configured: Optional[str]) -> str:
+    """Return a path to a 7-Zip executable.
+
+    Resolution order: explicit config value, ``7z``/``7zz`` on PATH, then the
+    default Windows install location.
+    """
+    if configured:
+        if Path(configured).is_file():
+            return str(Path(configured))
+        found = shutil.which(configured)
+        if found:
+            return found
+        raise RuntimeError(f"7-Zip not found at configured path: {configured}")
+
+    for candidate in ("7z", "7zz"):
+        found = shutil.which(candidate)
+        if found:
+            return found
+
+    default = r"C:\Program Files\7-Zip\7z.exe"
+    if os.path.isfile(default):
+        return default
+
+    raise RuntimeError(
+        "7-Zip (7z.exe) is required for RAR extraction but was not found. "
+        "Install 7-Zip or set download.sevenzip_path."
+    )
+
+
+def _write_sparse_archive(remote_file: RemoteRangeFile, name: str) -> Path:
+    """Write fetched HTTP blocks at their original offsets into a temp archive.
+
+    Unfetched regions stay zero-filled so the RAR header chain and the selected
+    members' data are present at their original offsets.
+    """
+    suffix = Path(name).suffix or ".rar"
+    fd, path = tempfile.mkstemp(suffix=suffix)
+    tmp = Path(path)
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.truncate(remote_file.size)
+            for block_id, content in sorted(remote_file.cache.items()):
+                out.seek(block_id * remote_file.block_size)
+                out.write(content)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    return tmp
+
+
+def _extract_member_7z(
+    sevenzip: str, sparse_archive: Path, member_name: str, dest: Path
+) -> Path:
+    """Extract a single member from a sparse archive to ``dest`` via 7-Zip."""
+    cmd = [
+        sevenzip,
+        "e",
+        "-so",
+        "-bb0",
+        "-p",
+        "--",
+        str(sparse_archive),
+        member_name,
+    ]
+    with open(dest, "wb") as out:
+        proc = subprocess.run(cmd, stdout=out, stderr=subprocess.PIPE, check=False)
+    if proc.returncode != 0:
+        dest.unlink(missing_ok=True)
+        stderr = proc.stderr.decode(errors="replace").strip()
+        raise RuntimeError(f"7-Zip extraction failed for {member_name}: {stderr}")
+    return dest
+
+
 def _selective_rar(
     name: str,
     url: str,
@@ -324,7 +381,7 @@ def _selective_rar(
     raw_dir: Path,
     interim_dir: Path,
 ) -> list[Path]:
-    remote_file = RemoteRangeFile(url, download_cfg.user_agent)
+    remote_file = RemoteRangeFile(url, download_cfg.user_agent, evict=False)
     try:
         archive = rarfile.RarFile(remote_file)
         try:
@@ -351,7 +408,9 @@ def _selective_rar(
             member_names = select_application_members(
                 archive.infolist(), applications, filename_pattern
             )
+
             result: list[Path] = []
+            pending: list[tuple[str, Any, Path, int]] = []
             for member_name in member_names:
                 dest = interim_dir / Path(member_name).name
                 if (
@@ -362,20 +421,52 @@ def _selective_rar(
                     logger.info("Skipping %s (already exists)", dest)
                     result.append(dest)
                     continue
-                with archive.open(member_name) as src:
+                info = archive.getinfo(member_name)
+                data_offset = getattr(info, "data_offset", None)
+                if data_offset is None:
+                    logger.warning("Skipping %s: no data offset available", member_name)
+                    continue
+                pending.append((member_name, info, dest, data_offset))
+
+            if not pending:
+                return result
+
+            sevenzip = _resolve_sevenzip(download_cfg.sevenzip_path)
+
+            fetched: list[tuple[str, Any, Path]] = []
+            for member_name, info, dest, data_offset in pending:
+                remote_file.seek(data_offset)
+                data = remote_file.read(info.compress_size)
+                if len(data) != info.compress_size:
+                    logger.warning(
+                        "Skipping %s: incomplete compressed read (%d of %d bytes)",
+                        member_name,
+                        len(data),
+                        info.compress_size,
+                    )
+                    continue
+                fetched.append((member_name, info, dest))
+
+            if not fetched:
+                return result
+
+            sparse_archive = _write_sparse_archive(remote_file, name)
+            try:
+                for member_name, _info, dest in fetched:
                     try:
-                        with open(dest, "wb") as dst:
-                            shutil.copyfileobj(src, dst)
-                    except OSError as exc:
+                        _extract_member_7z(sevenzip, sparse_archive, member_name, dest)
+                    except (OSError, RuntimeError) as exc:
                         logger.warning("Failed to extract %s: %s", member_name, exc)
                         continue
-                logger.info(
-                    "Extracted %s -> %s (%d bytes)",
-                    member_name,
-                    dest,
-                    dest.stat().st_size,
-                )
-                result.append(dest)
+                    logger.info(
+                        "Extracted %s -> %s (%d bytes)",
+                        member_name,
+                        dest,
+                        dest.stat().st_size,
+                    )
+                    result.append(dest)
+            finally:
+                sparse_archive.unlink(missing_ok=True)
             return result
         finally:
             archive.close()

@@ -17,23 +17,22 @@ datasets:
 selected_dataset_ids: 96jwzrp7fd
 
 # None or [] = all applications (no filtering).
-applications: ["Google Chrome", "Copilot"]
+applications: [ "Google Chrome", "Perplexity","Copilot", "Microsoft Edge", "Opera Mini", "Skype", "Telegram", "Whatsapp Messenger", "Eitaa", "Gmail", "Email" ]
 
 download:
   base_url: "https://data.mendeley.com/public-api/datasets"
   user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-  archive_extensions: [".rar", ".zip"]
+  archive_extensions: [ ".rar", ".zip" ]
   chunk_size: 8192
-  max_files: 1
+#  max_files: 1
   solid_fallback: true
+  sevenzip_path: null
 
 extract:
   overwrite: false
 
-filename_pattern: '^(?P<capture_timestamp>\d+)_(?P<application>.+)_(?P<download_speed>\d+(?:\.\d+)?)[-_](?P<upload_speed>\d+(?:\.\d+)?)\.pcap$'
-
 parsing:
-  packet_limit: 100000
+  packet_limit: 1000000
 
 paths:
   raw_dir: "data/raw"
