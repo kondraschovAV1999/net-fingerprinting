@@ -1,0 +1,9 @@
+# Chronological, per-pcap, per-application data split.
+#
+# ratios: (train, validation, test) fractions; must sum to 1.
+ratios: [0.7, 0.15, 0.15]
+
+# How to group PCAPs before the chronological split:
+#   - combined     : split each application across all datasets together
+#   - per_dataset  : split each (dataset, application) independently
+dataset_scope: combined
