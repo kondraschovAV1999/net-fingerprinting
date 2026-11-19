@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import hydra
 from omegaconf import DictConfig, OmegaConf
+from sklearn.preprocessing import LabelEncoder
 
 from data_splitting.filter import cap_pcaps_per_app, filter_applications
 from data_splitting.split import cross_validate_by_pcap, split_by_pcap
@@ -40,17 +41,17 @@ def _save_model_reports(
     confusion_matrix_dataframe(y_true, y_pred).to_csv(out_dir / "confusion_matrix.csv")
 
 
-def _run_holdout(X, y, train_idx, test_idx, cls) -> list[dict]:
+def _run_holdout(X, y, y_enc, le, train_idx, test_idx, cls) -> list[dict]:
     models_dir = Path(cls.models_dir)
     rows: list[dict] = []
     for spec in cls.models:
         if not spec.enabled:
             continue
         clf = build_classifier(spec.name, spec.params)
-        clf.fit(X.iloc[train_idx], y.iloc[train_idx])
+        clf.fit(X.iloc[train_idx], y_enc[train_idx])
 
-        pred_train = clf.predict(X.iloc[train_idx])
-        pred_test = clf.predict(X.iloc[test_idx])
+        pred_train = le.inverse_transform(clf.predict(X.iloc[train_idx]))
+        pred_test = le.inverse_transform(clf.predict(X.iloc[test_idx]))
         for split_name, idx, pred in (
             ("train", train_idx, pred_train),
             ("test", test_idx, pred_test),
@@ -64,7 +65,7 @@ def _run_holdout(X, y, train_idx, test_idx, cls) -> list[dict]:
     return rows
 
 
-def _run_cv(X, y, folds, cls) -> list[dict]:
+def _run_cv(X, y, y_enc, le, folds, cls) -> list[dict]:
     models_dir = Path(cls.models_dir)
     rows: list[dict] = []
     for spec in cls.models:
@@ -76,8 +77,8 @@ def _run_cv(X, y, folds, cls) -> list[dict]:
         y_true_pool: list[np.ndarray] = []
         y_pred_pool: list[np.ndarray] = []
         for fold, (train_idx, test_idx) in enumerate(folds):
-            clf.fit(X.iloc[train_idx], y.iloc[train_idx])
-            pred = clf.predict(X.iloc[test_idx])
+            clf.fit(X.iloc[train_idx], y_enc[train_idx])
+            pred = le.inverse_transform(clf.predict(X.iloc[test_idx]))
             m = compute_metrics(y.iloc[test_idx], pred, zero_division=cls.zero_division)
             per_fold.append(m)
             rows.append({"model": spec.name, "fold": fold, **m})
@@ -124,12 +125,17 @@ def run_classification(config: TrainConfig) -> pd.DataFrame:
     flow_meta = extractor.flow_meta
     y = flow_meta["application"]
 
+    # Encode string labels to numeric for estimators that require them
+    # (e.g. XGBoost); predictions are decoded back before reporting.
+    le = LabelEncoder()
+    y_enc = le.fit_transform(y.to_numpy())
+
     if ds.n_folds is not None:
         folds = cross_validate_by_pcap(flow_meta, ds.n_folds, ds.dataset_scope, ds.seed)
-        rows = _run_cv(X, y, folds, cls)
+        rows = _run_cv(X, y, y_enc, le, folds, cls)
     else:
         train_idx, test_idx = split_by_pcap(flow_meta, ds.test_size, ds.dataset_scope)
-        rows = _run_holdout(X, y, train_idx, test_idx, cls)
+        rows = _run_holdout(X, y, y_enc, le, train_idx, test_idx, cls)
 
     out = pd.DataFrame(rows)
     out.to_csv(cls.metrics_csv, index=False)

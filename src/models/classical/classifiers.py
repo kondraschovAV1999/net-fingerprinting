@@ -4,19 +4,23 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from lightgbm import LGBMClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
+from xgboost import XGBClassifier
 
-#: Name -> scikit-learn estimator class.
+#: Name -> estimator class.
 MODELS = {
     "decision_tree": DecisionTreeClassifier,
     "random_forest": RandomForestClassifier,
     "linear": LogisticRegression,
     "knn": KNeighborsClassifier,
     "svm": SVC,
+    "xgboost": XGBClassifier,
+    "lightgbm": LGBMClassifier,
 }
 
 #: Default hyperparameters (overridden by user-supplied ``params``).
@@ -26,6 +30,8 @@ DEFAULT_PARAMS: dict[str, dict[str, Any]] = {
     "linear": {"max_iter": 1000},
     "knn": {"n_neighbors": 5},
     "svm": {},
+    "xgboost": {},
+    "lightgbm": {},
 }
 
 

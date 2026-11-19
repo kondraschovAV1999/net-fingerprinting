@@ -1,10 +1,12 @@
 import numpy as np
 import pytest
+from lightgbm import LGBMClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.tree import DecisionTreeClassifier
+from xgboost import XGBClassifier
 
 from models.classical.classifiers import available_models, build_classifier
 
@@ -16,6 +18,8 @@ def test_available_models():
         "linear",
         "knn",
         "svm",
+        "xgboost",
+        "lightgbm",
     }
 
 
@@ -25,6 +29,8 @@ def test_build_returns_correct_estimator_type():
     assert isinstance(build_classifier("linear"), LogisticRegression)
     assert isinstance(build_classifier("knn"), KNeighborsClassifier)
     assert isinstance(build_classifier("svm"), SVC)
+    assert isinstance(build_classifier("xgboost"), XGBClassifier)
+    assert isinstance(build_classifier("lightgbm"), LGBMClassifier)
 
 
 def test_build_applies_params():
@@ -50,10 +56,10 @@ def test_build_unknown_model_raises():
 def test_every_model_fits_and_predicts():
     rng = np.random.RandomState(0)
     X = rng.rand(24, 5)
-    y = np.array(["a", "b", "c"] * 8)
+    y = np.array([0, 1, 2] * 8)
     for name in available_models():
         clf = build_classifier(name)
         clf.fit(X, y)
         pred = clf.predict(X[:6])
         assert len(pred) == 6
-        assert set(pred).issubset({"a", "b", "c"})
+        assert set(pred).issubset({0, 1, 2})

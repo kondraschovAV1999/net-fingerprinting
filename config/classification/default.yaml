@@ -18,6 +18,12 @@ models:
   - name: svm
     enabled: false
     params: {}
+  - name: xgboost
+    enabled: true
+    params: {}
+  - name: lightgbm
+    enabled: true
+    params: {}
 
 # zero_division for F1 / precision / recall on classes with no predictions.
 zero_division: 0
