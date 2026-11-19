@@ -8,8 +8,8 @@ from typing import Any
 
 import pandas as pd
 
-from data_loading import parse_filename, parse_pcap
-from data_loading.remote import download_application_pcaps
+from data_loading.ingest.remote import download_application_pcaps
+from data_loading.parsing import parse_filename, parse_pcap
 from utils.schema.config import DataLoadingConfig
 from utils.schema.data_download import DatasetConfig
 

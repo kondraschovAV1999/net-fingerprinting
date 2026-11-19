@@ -4,7 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from data_loading.remote import RemoteRangeFile
+from data_loading.ingest.remote import RemoteRangeFile
 
 
 class _RangeServer:
@@ -91,7 +91,7 @@ def test_remote_range_file_read_and_seek():
     assert server.requested_ranges  # range requests were actually used
 
 
-from data_loading import remote
+from data_loading.ingest import remote
 from utils.schema.parsing import DEFAULT_FILENAME_PATTERN as FILENAME_PATTERN
 
 COPLIOT = "1711364914_Copilot_6.45_0.65.pcap"
@@ -186,6 +186,13 @@ class _FakeRarFile:
     def close(self):
         pass
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
 
 def _solid_rar_factory(fileobj):
     rar = _FakeRarFile(fileobj)
@@ -200,8 +207,18 @@ class _FakeRemoteFile:
     def read(self, size=-1):
         return b"\0" * max(size, 0)
 
+    def prefetch(self, offset, size):
+        return size
+
     def close(self):
         pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
 
 
 def _count_calls(calls):
@@ -227,12 +244,12 @@ def _stub_downloads(monkeypatch, filenames):
 
 
 def _stub_sevenzip(monkeypatch):
-    monkeypatch.setattr(remote, "_resolve_sevenzip", lambda cfg=None: "7z.exe")
+    monkeypatch.setattr(remote, "resolve_sevenzip", lambda cfg=None: "7z.exe")
 
 
 def _stub_sparse_and_extract(monkeypatch, tmp_path, payload=b"pcap-bytes-"):
     monkeypatch.setattr(
-        remote, "_write_sparse_archive", lambda rf, name: tmp_path / "sparse.rar"
+        remote, "write_sparse_archive", lambda rf, name: tmp_path / "sparse.rar"
     )
 
     def _fake_extract(sevenzip, sparse, member, dest):
@@ -240,7 +257,7 @@ def _stub_sparse_and_extract(monkeypatch, tmp_path, payload=b"pcap-bytes-"):
         dest.write_bytes(payload + member.encode())
         return dest
 
-    monkeypatch.setattr(remote, "_extract_member_7z", _fake_extract)
+    monkeypatch.setattr(remote, "extract_member_7z", _fake_extract)
 
 
 def test_download_application_pcaps_selective(monkeypatch, tmp_path):
@@ -452,7 +469,7 @@ def test_download_application_pcaps_missing_sevenzip_skips(monkeypatch, tmp_path
     def _no_sevenzip(cfg=None):
         raise RuntimeError("7-Zip not found")
 
-    monkeypatch.setattr(remote, "_resolve_sevenzip", _no_sevenzip)
+    monkeypatch.setattr(remote, "resolve_sevenzip", _no_sevenzip)
     calls = {}
     monkeypatch.setattr(remote.download, "download_file", _count_calls(calls))
 
@@ -478,7 +495,7 @@ def test_download_application_pcaps_unwritable_member_skipped(monkeypatch, tmp_p
     _stub_downloads(monkeypatch, ["Qom-01.rar"])
     _stub_sevenzip(monkeypatch)
     monkeypatch.setattr(
-        remote, "_write_sparse_archive", lambda rf, name: tmp_path / "sparse.rar"
+        remote, "write_sparse_archive", lambda rf, name: tmp_path / "sparse.rar"
     )
     calls = {}
     monkeypatch.setattr(remote.download, "download_file", _count_calls(calls))

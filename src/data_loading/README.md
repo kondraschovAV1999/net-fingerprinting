@@ -5,12 +5,14 @@ a combined CSV.
 
 ## Modules
 
-- `download.py` — lists files via the Mendeley public API and downloads `.rar`/`.zip` archives.
-- `remote.py` — downloads only the PCAPs matching a configured application list, reading non-solid RAR members over HTTP Range; solid/non-RAR archives fall back to full download.
-- `extract.py` — extracts `.rar`/`.zip` archives into a target directory.
-- `parse_filename.py` — parses a PCAP filename into `FilenameMetadata`.
-- `parse_pcap.py` — streams PCAP packets into a pandas DataFrame.
 - `pipeline.py` — orchestrates the full chain and writes `combined.csv`.
+- `ingest/download.py` — Mendeley public API helpers and archive downloads.
+- `ingest/extract.py` — extracts `.rar`/`.zip` archives into a target directory.
+- `ingest/remote.py` — downloads only the PCAPs matching a configured application list; non-solid RARs read over HTTP Range, solid/non-RAR fall back to full download.
+- `ingest/remote_file.py` — `RemoteRangeFile`, a seekable file object backed by HTTP Range requests.
+- `ingest/rar.py` — 7-Zip resolution and sparse-archive member extraction.
+- `parsing/parse_filename.py` — parses a PCAP filename into `FilenameMetadata`.
+- `parsing/parse_pcap.py` — streams PCAP packets into a pandas DataFrame.
 
 ## Config
 

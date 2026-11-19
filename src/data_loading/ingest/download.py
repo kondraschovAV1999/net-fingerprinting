@@ -1,4 +1,4 @@
-"""Download dataset archives from the Mendeley Data public API."""
+"""Low-level helpers for the Mendeley Data public API and file downloads."""
 
 from __future__ import annotations
 
@@ -9,8 +9,6 @@ from typing import Any
 
 import requests
 from tqdm import tqdm
-
-from utils.schema.data_download import DatasetConfig, DownloadConfig
 
 logger = logging.getLogger(__name__)
 
@@ -84,51 +82,3 @@ def download_file(
         part_path.unlink(missing_ok=True)
         raise
     return dest_path
-
-
-def download_dataset(
-    dataset: DatasetConfig,
-    download: DownloadConfig,
-    dest_dir: Path,
-) -> list[Path]:
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        files = list_dataset_files(
-            dataset.dataset_id,
-            dataset.version,
-            download.base_url,
-            download.user_agent,
-        )
-    except requests.RequestException as exc:
-        logger.warning(
-            "Failed to list files for dataset %s: %s", dataset.dataset_id, exc
-        )
-        return []
-
-    archives = filter_archives(files, download.archive_extensions)
-    if download.max_files is not None:
-        archives = archives[: download.max_files]
-    if not archives:
-        logger.warning("No archive files found for dataset %s", dataset.dataset_id)
-        return []
-
-    downloaded: list[Path] = []
-    for file_info in archives:
-        name = Path(file_info.get("filename") or "archive.bin").name
-        url = resolve_download_url(file_info)
-        if not url:
-            logger.warning("Skipping %s: no download URL", name)
-            continue
-        dest_path = dest_dir / name
-        if dest_path.exists() and dest_path.stat().st_size > 0:
-            logger.info("Skipping download (already exists): %s", dest_path)
-            downloaded.append(dest_path)
-            continue
-        try:
-            downloaded.append(
-                download_file(url, dest_path, download.user_agent, download.chunk_size)
-            )
-            logger.info("Downloaded %s -> %s", name, dest_path)
-        except requests.RequestException as exc:
-            logger.warning("Failed to download %s: %s", name, exc)
-    return downloaded

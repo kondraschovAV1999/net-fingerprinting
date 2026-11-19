@@ -5,7 +5,7 @@ github.com/jflixjtu/FOAP) into a configurable extractor.
 
 The extractor consumes a packet DataFrame with a precomputed flow identifier
 and direction (see :func:`prepare_packet_dataframe` to derive both from the raw
-columns produced by ``data_loading.parse_pcap``):
+columns produced by ``data_loading.parsing.parse_pcap``):
 
     flow_id    : str, canonical bidirectional flow key (5-tuple)
     time       : float, packet arrival time in seconds
