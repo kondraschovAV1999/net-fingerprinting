@@ -4,33 +4,31 @@
 #   Available names: decision_tree, random_forest, linear, knn, svm.
 models:
   - name: decision_tree
-    enabled: true
+    enabled: false
     params: {}
   - name: random_forest
     enabled: true
-    params: { n_estimators: 100 }
+    params: { n_estimators: 250 }
   - name: linear
-    enabled: true
+    enabled: false
     params: { max_iter: 1000 }
   - name: knn
     enabled: true
-    params: { n_neighbors: 5 }
+    params: { n_neighbors: 10 }
   - name: svm
-    enabled: true
+    enabled: false
     params: {}
 
 # zero_division for F1 / precision / recall on classes with no predictions.
 zero_division: 0
 
-# Feature extraction settings (see config/preprocessing).
-feature_config: statistical   # foap | basic | statistical
-rate_interval: 1.0
-interactive_bins: 20
+# Restrict training to specific applications (case-insensitive). null = all.
+applications: [ "Google Chrome", "Perplexity","Copilot", "Microsoft Edge", "Opera Mini"]
 
-# Split settings (see config/data_splitting).
-ratios: [0.7, 0.15, 0.15]
-dataset_scope: combined        # combined | per_dataset
+# Cap the number of pcaps per application (oldest first). null = no limit.
+max_pcaps_per_app: 3
 
 # Input / output paths.
 combined_csv: data/processed/combined.csv
-metrics_csv: data/processed/metrics.csv
+metrics_csv: output/classic/metrics.csv
+models_dir: output/classic/models   # per-model confusion matrix + report

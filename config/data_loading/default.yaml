@@ -17,7 +17,7 @@ datasets:
 selected_dataset_ids: 96jwzrp7fd
 
 # None or [] = all applications (no filtering).
-applications: [ "Google Chrome", "Perplexity","Copilot", "Microsoft Edge", "Opera Mini", "Skype", "Telegram", "Whatsapp Messenger", "Eitaa", "Gmail", "Email" ]
+applications: ["Google Chrome", "Perplexity","Copilot", "Microsoft Edge", "Opera Mini", "Skype", "Telegram", "Whatsapp Messenger", "Eitaa", "Gmail", "Email" ]
 
 download:
   base_url: "https://data.mendeley.com/public-api/datasets"

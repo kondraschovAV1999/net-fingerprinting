@@ -1,0 +1,6 @@
+# Classification training entry point. Composes the per-stage configs.
+defaults:
+  - data_splitting: default
+  - preprocessing: default
+  - classification: default
+  - _self_
