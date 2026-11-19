@@ -285,8 +285,10 @@ def test_download_application_pcaps_selective(monkeypatch, tmp_path):
     )
 
     assert [p.name for p in result] == [CHROME]
-    assert (interim / CHROME).read_bytes() == b"pcap-bytes-" + CHROME.encode()
-    assert not (interim / COPLIOT).exists()
+    assert (
+        interim / "google_chrome" / CHROME
+    ).read_bytes() == b"pcap-bytes-" + CHROME.encode()
+    assert not (interim / "copilot" / COPLIOT).exists()
     assert "download_file" not in calls  # no full download
 
 
@@ -303,11 +305,12 @@ def test_download_application_pcaps_solid_fallback(monkeypatch, tmp_path):
         return dest
 
     monkeypatch.setattr(remote.download, "download_file", fake_download_file)
-    monkeypatch.setattr(
-        remote.extract,
-        "extract_archive",
-        lambda dest, out, cfg: [out / COPLIOT],
-    )
+
+    def fake_extract(dest, out, cfg):
+        (out / COPLIOT).write_bytes(b"fake-pcap")
+        return [out / COPLIOT]
+
+    monkeypatch.setattr(remote.extract, "extract_archive", fake_extract)
 
     result = remote.download_application_pcaps(
         _dataset(),
@@ -355,11 +358,13 @@ def test_download_application_pcaps_zip_fallback(monkeypatch, tmp_path):
         return dest
 
     monkeypatch.setattr(remote.download, "download_file", fake_download_file)
-    monkeypatch.setattr(
-        remote.extract,
-        "extract_archive",
-        lambda dest, out, cfg: [out / COPLIOT, out / CHROME],
-    )
+
+    def fake_extract(dest, out, cfg):
+        (out / COPLIOT).write_bytes(b"copilot-pcap")
+        (out / CHROME).write_bytes(b"chrome-pcap")
+        return [out / COPLIOT, out / CHROME]
+
+    monkeypatch.setattr(remote.extract, "extract_archive", fake_extract)
 
     result = remote.download_application_pcaps(
         _dataset(),
@@ -384,8 +389,9 @@ def test_download_application_pcaps_skips_existing(monkeypatch, tmp_path):
     monkeypatch.setattr(remote.download, "download_file", _count_calls(calls))
 
     interim = tmp_path / "interim" / "Qom"
-    interim.mkdir(parents=True, exist_ok=True)
-    (interim / CHROME).write_bytes(b"already-there")
+    chrome_dir = interim / "google_chrome"
+    chrome_dir.mkdir(parents=True, exist_ok=True)
+    (chrome_dir / CHROME).write_bytes(b"already-there")
 
     result = remote.download_application_pcaps(
         _dataset(),
@@ -398,7 +404,7 @@ def test_download_application_pcaps_skips_existing(monkeypatch, tmp_path):
     )
 
     assert [p.name for p in result] == [CHROME]
-    assert (interim / CHROME).read_bytes() == b"already-there"  # not overwritten
+    assert (chrome_dir / CHROME).read_bytes() == b"already-there"  # not overwritten
     assert "download_file" not in calls
 
 
@@ -448,6 +454,92 @@ def test_remote_range_file_short_read_raises():
         try:
             with pytest.raises(RuntimeError, match="Short read"):
                 f.read(100)
+        finally:
+            f.close()
+
+
+class _FlakyRangeServer(_RangeServer):
+    """Range server that fails the first ``fail_times`` range GETs, then serves normally."""
+
+    def __init__(
+        self, data, fail_times=1, fail_status=429, fail_content_type="text/html"
+    ):
+        self.fail_times = fail_times
+        self.fail_status = fail_status
+        self.fail_content_type = fail_content_type
+        self.fail_count = 0
+        super().__init__(data)
+
+    def _make_handler(self):
+        data = self.data
+        requested = self.requested_ranges
+        server = self
+
+        class _Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_HEAD(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Accept-Ranges", "bytes")
+                self.end_headers()
+
+            def do_GET(self):
+                if server.fail_count < server.fail_times:
+                    server.fail_count += 1
+                    body = b"<html>challenge</html>"
+                    self.send_response(server.fail_status)
+                    self.send_header("Content-Type", server.fail_content_type)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+
+                header = self.headers.get("Range")
+                if header and header.startswith("bytes="):
+                    start_s, _, end_s = header[6:].partition("-")
+                    start = int(start_s)
+                    end = int(end_s) if end_s else len(data) - 1
+                    end = min(end, len(data) - 1)
+                    requested.append((start, end))
+                    body = data[start : end + 1]
+                    self.send_response(206)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header(
+                        "Content-Range", f"bytes {start}-{end}/{len(data)}"
+                    )
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.end_headers()
+                    self.wfile.write(data)
+
+        return _Handler
+
+
+def test_remote_range_file_retries_on_429():
+    data = bytes(range(256)) * 20  # 5120 bytes
+    with _FlakyRangeServer(data, fail_times=1, fail_status=429) as server:
+        f = RemoteRangeFile(server.url, "test-agent", block_size=1024, backoff_base=0.0)
+        try:
+            assert f.read(10) == data[:10]
+        finally:
+            f.close()
+
+
+def test_remote_range_file_retries_on_200_html():
+    data = bytes(range(256)) * 20
+    with _FlakyRangeServer(
+        data, fail_times=1, fail_status=200, fail_content_type="text/html"
+    ) as server:
+        f = RemoteRangeFile(server.url, "test-agent", block_size=1024, backoff_base=0.0)
+        try:
+            assert f.read(10) == data[:10]
         finally:
             f.close()
 
